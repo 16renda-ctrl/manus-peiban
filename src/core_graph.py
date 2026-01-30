@@ -136,5 +136,36 @@ def build_companion_graph():
 
 if __name__ == "__main__":
     app = build_companion_graph()
-    result = app.invoke({"user_input": "我今天心情特别好！", "current_personality": "mentor", "conversation_history": []})
-    print(f"\n最终回复：\n{result['final_response']}")
+
+    print("=" * 60)
+    print("欢迎使用伴伴机器人！")
+    print("=" * 60)
+    print("\n可用人格：")
+    for key, value in PERSONALITY_MASKS.items():
+        print(f"  • {key}: {value['name']}")
+    print()
+
+    while True:
+        personality = input("请选择人格 (mentor/trickster/guardian，或输入 'quit' 退出): ").strip().lower()
+        if personality == "quit":
+            print("再见！")
+            break
+        if personality not in PERSONALITY_MASKS:
+            print("❌ 无效的人格选择，请重试。")
+            continue
+
+        user_input = input("请输入你的消息: ").strip()
+        if not user_input:
+            print("❌ 消息不能为空。")
+            continue
+
+        print("\n" + "=" * 60)
+        result = app.invoke({
+            "user_input": user_input,
+            "current_personality": personality,
+            "conversation_history": []
+        })
+        print("=" * 60)
+        print(f"\n【{PERSONALITY_MASKS[personality]['name']}】的回复：\n")
+        print(result['final_response'])
+        print("\n" + "=" * 60 + "\n")
