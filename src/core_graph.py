@@ -2,7 +2,7 @@ import os
 import json
 from typing import TypedDict, Literal
 from langgraph.graph import StateGraph, END
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI # 导入 AsyncOpenAI
 from dotenv import load_dotenv
 from datetime import datetime
 
@@ -23,10 +23,21 @@ class CompanionState(TypedDict):
     final_response: str
 
 def get_openai_client():
+    """返回同步客户端，用于兼容旧的 CLI 模式"""
     base_url = os.getenv("OPENAI_BASE_URL")
-    if not base_url.endswith("/v1"):
-        base_url += "/v1"
+    if not base_url or not base_url.endswith("/v1"):
+        base_url = (base_url or "") + "/v1"
     return OpenAI(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        base_url=base_url
+    )
+
+def get_async_openai_client():
+    """返回异步客户端，用于新的 API 模式"""
+    base_url = os.getenv("OPENAI_BASE_URL")
+    if not base_url or not base_url.endswith("/v1"):
+        base_url = (base_url or "") + "/v1"
+    return AsyncOpenAI(
         api_key=os.getenv("OPENAI_API_KEY"),
         base_url=base_url
     )
@@ -46,15 +57,16 @@ PERSONALITY_MASKS = {
     },
 }
 
-def node_receive_input(state: CompanionState) -> CompanionState:
+# 所有节点改为异步函数
+async def node_receive_input(state: CompanionState) -> CompanionState:
     print(f"\n[节点 1] 接收用户输入: {state['user_input']}")
     return state
 
-def node_analyze_emotion(state: CompanionState) -> CompanionState:
+async def node_analyze_emotion(state: CompanionState) -> CompanionState:
     print(f"\n[节点 2] 分析用户情绪...")
-    client = get_openai_client()
+    client = get_async_openai_client()
     try:
-        res = client.chat.completions.create(
+        res = await client.chat.completions.create(
             model="gemini-3-flash-preview",
             messages=[{"role": "system", "content": "只返回一个词：happy, sad, angry, neutral"},
                       {"role": "user", "content": state['user_input']}]
@@ -67,11 +79,11 @@ def node_analyze_emotion(state: CompanionState) -> CompanionState:
     print(f"  → 情绪: {emotion}")
     return state
 
-def node_decide_skill(state: CompanionState) -> CompanionState:
+async def node_decide_skill(state: CompanionState) -> CompanionState:
     print(f"\n[节点 3] 决策技能...")
-    client = get_openai_client()
+    client = get_async_openai_client()
     try:
-        res = client.chat.completions.create(
+        res = await client.chat.completions.create(
             model="gemini-3-flash-preview",
             messages=[{"role": "system", "content": "判断是否需要工具：long_term_memory_store, shared_experience_fetch。不需要返回 none。"},
                       {"role": "user", "content": state['user_input']}]
@@ -86,20 +98,23 @@ def node_decide_skill(state: CompanionState) -> CompanionState:
     print(f"  → 决策: {state['skill_to_use'] or '直接回复'}")
     return state
 
-def node_execute_skill(state: CompanionState) -> CompanionState:
+async def node_execute_skill(state: CompanionState) -> CompanionState:
     if not state["should_use_skill"]:
         state["skill_result"] = ""
         return state
     print(f"\n[节点 4] 执行技能...")
+    # 异步模拟技能执行
+    await asyncio.sleep(0.1) 
     state["skill_result"] = "模拟数据：操作成功。"
     return state
 
-def node_generate_response(state: CompanionState) -> CompanionState:
+async def node_generate_response(state: CompanionState) -> CompanionState:
     print(f"\n[节点 5] 生成回复...")
-    client = get_openai_client()
+    client = get_async_openai_client()
     personality = PERSONALITY_MASKS[state["current_personality"]]
     try:
-        res = client.chat.completions.create(
+        # 使用流式 API，但只取最终结果，以兼容 LangGraph 的状态更新模式
+        res = await client.chat.completions.create(
             model="gemini-3-flash-preview",
             messages=[
                 {"role": "system", "content": personality["system_prompt"]},
@@ -113,12 +128,15 @@ def node_generate_response(state: CompanionState) -> CompanionState:
     print(f"  → 回复: {state['final_response'][:30]}...")
     return state
 
-def node_update_history(state: CompanionState) -> CompanionState:
+async def node_update_history(state: CompanionState) -> CompanionState:
+    # 异步模拟历史记录更新
+    await asyncio.sleep(0.01)
     state["conversation_history"].append({"user": state["user_input"], "bot": state["final_response"]})
     return state
 
 def build_companion_graph():
     graph = StateGraph(CompanionState)
+    # 节点函数保持不变，但现在它们是异步的
     graph.add_node("receive_input", node_receive_input)
     graph.add_node("analyze_emotion", node_analyze_emotion)
     graph.add_node("decide_skill", node_decide_skill)
@@ -135,6 +153,9 @@ def build_companion_graph():
     return graph.compile()
 
 if __name__ == "__main__":
+    # CLI 模式需要使用同步调用
+    import asyncio
+    
     app = build_companion_graph()
 
     print("=" * 60)
@@ -160,11 +181,12 @@ if __name__ == "__main__":
             continue
 
         print("\n" + "=" * 60)
-        result = app.invoke({
+        # 在同步环境中运行异步图
+        result = asyncio.run(app.ainvoke({
             "user_input": user_input,
             "current_personality": personality,
             "conversation_history": []
-        })
+        }))
         print("=" * 60)
         print(f"\n【{PERSONALITY_MASKS[personality]['name']}】的回复：\n")
         print(result['final_response'])
